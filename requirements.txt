@@ -2,3 +2,5 @@ streamlit
 langchain
 openai
 PyPDF2
+pdf2image
+pytesseract
