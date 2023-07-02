@@ -15,6 +15,9 @@ api_key = os.environ["OPENAI_API_KEY"]
 if api_key is not None:
   print('I have an openai api key')
 
+os.environ["PATH"] += os.pathsep + '/opt/homebrew/bin/pdfinfo'
+
+
 llm = OpenAI(temperature=0.1)
 
 def pdf_to_text(pdf_path):
