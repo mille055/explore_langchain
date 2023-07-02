@@ -11,8 +11,8 @@ from langchain.llms import OpenAI
 from langchain.document_loaders import TextLoader
 from langchain.indexes import VectorstoreIndexCreator
 
-openai.api_key = os.environ["OPENAI_API_KEY"]
-if openai.api_key is not None:
+api_key = os.environ["OPENAI_API_KEY"]
+if api_key is not None:
   print('I have an openai api key')
 
 llm = OpenAI(temperature=0.1)
