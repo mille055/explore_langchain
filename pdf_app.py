@@ -1,100 +1,104 @@
 import streamlit as st
-import pandas as pd
-import os
-import numpy as np
-
-from pdf2image import convert_from_path
-import pytesseract
+from dotenv import load_dotenv
 from PyPDF2 import PdfReader
-from langchain.agents import create_csv_agent
-from langchain.llms import OpenAI
-from langchain.document_loaders import TextLoader
-from langchain.indexes import VectorstoreIndexCreator
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.embeddings import OpenAIEmbeddings, HuggingFaceInstructEmbeddings
+from langchain.vectorstores import FAISS
+from langchain.chat_models import ChatOpenAI
+from langchain.memory import ConversationBufferMemory
+from langchain.chains import ConversationalRetrievalChain
+from htmlTemplates import css, bot_template, user_template
+from langchain.llms import HuggingFaceHub
 
-api_key = os.environ["OPENAI_API_KEY"]
-if api_key is not None:
-  print('I have an openai api key')
-
-os.environ["PATH"] += os.pathsep + '/opt/homebrew/bin/pdfinfo'
-
-
-llm = OpenAI(temperature=0.1)
-
-def pdf_to_text(pdf_path):
-    # Step 1: Convert PDF to images
-    images = convert_from_path(pdf_path)
-
-    with open('output.txt', 'w') as f:  # Open the text file in write mode
-        for i, image in enumerate(images):
-            # Save pages as images in the pdf
-            image_file = f'page{i}.jpg'
-            image.save(image_file, 'JPEG')
-
-            # Step 2: Use OCR to extract text from images
-            text = pytesseract.image_to_string(image_file)
-
-            f.write(text + '\n')  # Write the text to the file and add a newline for each page
-
-def load_csv_data(uploaded_file):
-    df = pd.read_csv(uploaded_file)
-    df.to_csv("uploaded_file.csv")
-    return df
-
-def load_txt_data(uploaded_file):
-    with open('uploaded_file.txt', 'w') as f:
-        f.write(uploaded_file.getvalue().decode())
-    return uploaded_file.getvalue().decode()
-
-def load_pdf_data(uploaded_file):
-    with open('uploaded_file.pdf', 'wb') as f:
-        f.write(uploaded_file.getbuffer())
-    pdf = PdfReader('uploaded_file.pdf')
+def get_pdf_text(pdf_docs):
     text = ""
-    for page in pdf.pages:
-        text += page.extract_text()
-    pdf_to_text('uploaded_file.pdf')
+    for pdf in pdf_docs:
+        pdf_reader = PdfReader(pdf)
+        for page in pdf_reader.pages:
+            text += page.extract_text()
     return text
 
+
+def get_text_chunks(text):
+    text_splitter = CharacterTextSplitter(
+        separator="\n",
+        chunk_size=1000,
+        chunk_overlap=200,
+        length_function=len
+    )
+    chunks = text_splitter.split_text(text)
+    return chunks
+
+
+def get_vectorstore(text_chunks):
+    embeddings = OpenAIEmbeddings()
+    # embeddings = HuggingFaceInstructEmbeddings(model_name="hkunlp/instructor-xl")
+    vectorstore = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
+    return vectorstore
+
+
+def get_conversation_chain(vectorstore):
+    llm = ChatOpenAI()
+    # llm = HuggingFaceHub(repo_id="google/flan-t5-xxl", model_kwargs={"temperature":0.5, "max_length":512})
+
+    memory = ConversationBufferMemory(
+        memory_key='chat_history', return_messages=True)
+    conversation_chain = ConversationalRetrievalChain.from_llm(
+        llm=llm,
+        retriever=vectorstore.as_retriever(),
+        memory=memory
+    )
+    return conversation_chain
+
+
+def handle_userinput(user_question):
+    response = st.session_state.conversation({'question': user_question})
+    st.session_state.chat_history = response['chat_history']
+
+    for i, message in enumerate(st.session_state.chat_history):
+        if i % 2 == 0:
+            st.write(user_template.replace(
+                "{{MSG}}", message.content), unsafe_allow_html=True)
+        else:
+            st.write(bot_template.replace(
+                "{{MSG}}", message.content), unsafe_allow_html=True)
+
+
 def main():
-    st.title("Chat With Your Documents (csv, txt and pdf)")
+    load_dotenv()
+    st.set_page_config(page_title="Chat with multiple PDFs",
+                       page_icon=":books:")
+    st.write(css, unsafe_allow_html=True)
 
-    file = st.file_uploader("Upload a file", type=["csv", "txt", "pdf"])
+    if "conversation" not in st.session_state:
+        st.session_state.conversation = None
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = None
 
+    st.header("Chat with multiple PDFs :books:")
+    user_question = st.text_input("Ask a question about your documents:")
+    if user_question:
+        handle_userinput(user_question)
 
-    if file is not None:
-        if file.type == "text/csv":
-            doc = "csv"
-            data = load_csv_data(file)
-            agent = create_csv_agent(OpenAI(temperature=0), 'uploaded_file.csv', verbose=True)
-            st.dataframe(data)
+    with st.sidebar:
+        st.subheader("Your documents")
+        pdf_docs = st.file_uploader(
+            "Upload your PDFs here and click on 'Process'", accept_multiple_files=True)
+        if st.button("Process"):
+            with st.spinner("Processing"):
+                # get pdf text
+                raw_text = get_pdf_text(pdf_docs)
 
-        elif file.type == "text/plain":
-            doc = "text"
-            data = load_txt_data(file)
-            loader = TextLoader('uploaded_file.txt')
-            index = VectorstoreIndexCreator().from_loaders([loader])
+                # get the text chunks
+                text_chunks = get_text_chunks(raw_text)
 
-        elif file.type == "application/pdf":
-            doc = "text"
-            data = load_pdf_data(file)
-            loader = TextLoader('output.txt')
-            index = VectorstoreIndexCreator().from_loaders([loader])
+                # create vector store
+                vectorstore = get_vectorstore(text_chunks)
 
-        # do something with the data
-
-
-        question = st.text_input("Once uploaded, you can chat with your document. Enter your question here:")
-        submit_button = st.button('Submit')
-
-        if submit_button:
-            if doc == "text":
-                response = index.query(question)
-            else:
-                response = agent.run(question)
-
-            if response:
-                st.write(response)
+                # create conversation chain
+                st.session_state.conversation = get_conversation_chain(
+                    vectorstore)
 
 
-if __name__ == "__main__":
-    main()                  
+if __name__ == '__main__':
+    main()
