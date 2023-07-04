@@ -37,7 +37,7 @@ bot_template = '''
 user_template = '''
 <div class="chat-message user">
     <div class="avatar">
-        <img src="https://github.com/mille055/explore_langchain/tree/main/assets/duke.png">
+        <img src="https://github.com/mille055/explore_langchain/blob/main/assets/duke.png">
     </div>    
     <div class="message">{{MSG}}</div>
 </div>
